@@ -3,8 +3,10 @@
 =============================================
 - 方向鍵左右移動
 - 空白鍵跳躍（僅限站在平台上時）
-- 按住 Shift 衝刺（消耗體力）
-- 掉出畫面底部 → Game Over，按任意鍵重新開始
+- 按住 Shift 衝刺（消耗體力，空中放開維持慣性至落地）
+- Z 鍵揮刀發射劍氣
+- 消滅敵人得分，被碰到扣血
+- 掉出畫面底部或血量歸零 → Game Over
 """
 
 import pygame
@@ -62,6 +64,30 @@ STAMINA_BAR_GREEN = (50, 200, 80)
 STAMINA_BAR_YELLOW = (220, 200, 40)
 STAMINA_BAR_RED = (200, 50, 50)
 STAMINA_BAR_BORDER = (200, 200, 200)
+
+# 血量系統
+HP_MAX = 5
+HP_BAR_HEART = (220, 30, 50)      # 愛心紅
+HP_BAR_EMPTY = (80, 80, 80)       # 空心灰
+INVINCIBLE_FRAMES = 90            # 受傷後無敵幀數 (1.5秒)
+
+# 劍氣設定
+SLASH_WIDTH = 28
+SLASH_HEIGHT = 10
+SLASH_SPEED = 12
+SLASH_LIFETIME = 40              # 劍氣存活幀數
+SLASH_COOLDOWN = 18              # 攻擊冷卻幀數
+SLASH_COLOR = (180, 220, 255)    # 淡藍白劍氣
+SLASH_GLOW = (100, 180, 255, 100)
+
+# 敵人設定
+ENEMY_WIDTH = 28
+ENEMY_HEIGHT = 32
+ENEMY_SPEED = 2
+ENEMY_COLOR = (120, 40, 160)     # 紫色魔物
+ENEMY_EYE = (255, 60, 60)        # 紅眼
+ENEMY_SPAWN_INTERVAL = 120       # 每隔幾幀嘗試生成敵人
+ENEMY_KILL_SCORE = 50            # 殺敵加分
 
 # 平台設定（石橋風格，較厚）
 PLATFORM_HEIGHT = 32
@@ -134,20 +160,45 @@ class Player:
         # 衝刺 & 體力
         self.sprinting: bool = False
         self.stamina: float = STAMINA_MAX
+        self.air_momentum: bool = False  # 空中慣性狀態
+
+        # 攻擊
+        self.attack_cooldown: int = 0   # 攻擊冷卻倒數
+        self.slash_anim: int = 0        # 掮刀動畫計時器
+
+        # 血量
+        self.hp: int = HP_MAX
+        self.invincible: int = 0        # 無敵幀倒數
 
         # 奔跑動畫計時器
-        self.anim_timer: float = 0.0    # 持續遞增的計時器
-        self.is_moving: bool = False    # 這一幀是否有水平移動
+        self.anim_timer: float = 0.0
+        self.is_moving: bool = False
 
-    def handle_input(self, keys):
-        """根據鍵盤輸入更新移動、衝刺與跳躍。"""
+    def handle_input(self, keys, slash_list: list):
+        """根據鍵盤輸入更新移動、衝刺、跳躍與攻擊。"""
         self.is_moving = False
 
         # 判斷是否衝刺（按住 Shift 且體力足夠）
         want_sprint = (keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT])
-        self.sprinting = want_sprint and self.stamina > STAMINA_MIN_TO_SPRINT
 
-        speed = SPRINT_SPEED if self.sprinting else PLAYER_SPEED
+        if self.on_ground:
+            # 地面上：正常衝刺判定，並重置空中慣性
+            self.sprinting = want_sprint and self.stamina > STAMINA_MIN_TO_SPRINT
+            self.air_momentum = False
+        else:
+            # 空中：如果剛才在衝刺中起跳，標記慣性
+            if self.sprinting and not want_sprint:
+                self.air_momentum = True
+                self.sprinting = False
+            elif self.sprinting:
+                # 空中繼續按 Shift — 繼續衝刺（消耗體力）
+                self.sprinting = self.stamina > 0
+
+        # 決定實際速度
+        if self.sprinting or self.air_momentum:
+            speed = SPRINT_SPEED
+        else:
+            speed = PLAYER_SPEED
 
         if keys[pygame.K_LEFT]:
             self.rect.x -= speed
@@ -161,12 +212,38 @@ class Player:
             self.vel_y = JUMP_FORCE
             self.on_ground = False
 
+        # 攻擊（Z 鍵）
+        if keys[pygame.K_z] and self.attack_cooldown <= 0:
+            self.attack_cooldown = SLASH_COOLDOWN
+            self.slash_anim = 10  # 掮刀動畫持續 10 幀
+            # 生成劍氣
+            sx = self.rect.right + 4 if self.facing_right else self.rect.left - SLASH_WIDTH - 4
+            sy = self.rect.centery
+            slash_list.append(SlashProjectile(sx, sy, self.facing_right))
+
+        if self.attack_cooldown > 0:
+            self.attack_cooldown -= 1
+        if self.slash_anim > 0:
+            self.slash_anim -= 1
+
+    def take_damage(self):
+        """受到傷害（有無敵保護）。"""
+        if self.invincible > 0:
+            return
+        self.hp -= 1
+        self.invincible = INVINCIBLE_FRAMES
+
+    def update_invincible(self):
+        if self.invincible > 0:
+            self.invincible -= 1
+
     def update_stamina(self):
         """更新體力：衝刺時消耗，否則緩慢恢復。"""
-        if self.sprinting and self.is_moving:
+        if (self.sprinting or self.air_momentum) and self.is_moving:
             self.stamina = max(0, self.stamina - STAMINA_DRAIN)
             if self.stamina <= 0:
                 self.sprinting = False
+                # 空中慣性不因體力耗盡而停止，但不再消耗
         else:
             self.stamina = min(STAMINA_MAX, self.stamina + STAMINA_REGEN)
 
@@ -194,14 +271,19 @@ class Player:
                     self.rect.bottom = plat.rect.top
                     self.vel_y = 0
                     self.on_ground = True
+                    self.air_momentum = False  # 落地時取消空中慣性
                     break
 
     def is_dead(self) -> bool:
-        """掉出螢幕底部 → 死亡。"""
-        return self.rect.top > SCREEN_HEIGHT
+        """掉出螢幕底部或血量歸零 → 死亡。"""
+        return self.rect.top > SCREEN_HEIGHT or self.hp <= 0
 
     def draw(self, surface: pygame.Surface):
         """用幾何圖形繪製勇者角色（含奔跑動畫）。"""
+        # 受傷無敵時閃爍
+        if self.invincible > 0 and (self.invincible // 4) % 2 == 1:
+            return  # 閃爍幀不繪製
+
         r = self.rect
         cx = r.centerx
         flip = 1 if self.facing_right else -1
@@ -294,8 +376,8 @@ class Player:
         ])
         pygame.draw.rect(surface, HERO_SWORD_HILT, (sword_x - 2, sy + 18, 6, 3))
 
-        # --- 衝刺時腳下揚塵粒子 ---
-        if self.sprinting and self.is_moving and self.on_ground:
+        # --- 衝刺 / 空中慣性時腳下揚塵粒子 ---
+        if (self.sprinting or self.air_momentum) and self.is_moving and self.on_ground:
             for _ in range(3):
                 dx = random.randint(-12, -2) * flip
                 dy = random.randint(-4, 2)
@@ -304,6 +386,37 @@ class Player:
                 dust = pygame.Surface((size, size), pygame.SRCALPHA)
                 dust.fill((180, 170, 150, alpha))
                 surface.blit(dust, (cx + dx - size // 2, r.bottom + dy - size))
+
+        # --- 掮刀動畫（弧形斬擊特效） ---
+        if self.slash_anim > 0:
+            arc_progress = 1.0 - (self.slash_anim / 10.0)
+            arc_alpha = max(30, int(200 * (self.slash_anim / 10.0)))
+            arc_surf = pygame.Surface((50, 50), pygame.SRCALPHA)
+            start_angle = -0.5 if flip == 1 else 2.1
+            end_angle = start_angle + 2.0 * arc_progress
+            pygame.draw.arc(arc_surf, (*SLASH_COLOR, arc_alpha),
+                            (0, 0, 48, 48), start_angle, end_angle, 3)
+            arc_x = cx + 10 * flip - 25
+            arc_y = by + 5
+            surface.blit(arc_surf, (arc_x, arc_y))
+
+    def draw_hp(self, surface: pygame.Surface):
+        """用愛心圖示顯示血量。"""
+        start_x, start_y = 15, 68
+        heart_size = 16
+        spacing = 22
+        for i in range(HP_MAX):
+            x = start_x + i * spacing
+            color = HP_BAR_HEART if i < self.hp else HP_BAR_EMPTY
+            # 簡易愛心：兩個圓 + 三角形
+            radius = heart_size // 4
+            pygame.draw.circle(surface, color, (x + radius, start_y + radius), radius)
+            pygame.draw.circle(surface, color, (x + heart_size - radius, start_y + radius), radius)
+            pygame.draw.polygon(surface, color, [
+                (x, start_y + radius),
+                (x + heart_size, start_y + radius),
+                (x + heart_size // 2, start_y + heart_size)
+            ])
 
     def draw_stamina_bar(self, surface: pygame.Surface):
         """在畫面左上角繪製體力條。"""
@@ -338,6 +451,126 @@ class Player:
         small_font = pygame.font.SysFont(None, 20)
         label = small_font.render("STAMINA", True, WHITE)
         surface.blit(label, (bar_x + bar_w + 8, bar_y - 1))
+
+
+# --------------- 劍氣投射物 ---------------
+class SlashProjectile:
+    """勇者掮出的劍氣波，水平飛行並傷害敵人。"""
+
+    def __init__(self, x: float, y: float, facing_right: bool):
+        self.direction = 1 if facing_right else -1
+        self.rect = pygame.Rect(x, y - SLASH_HEIGHT // 2, SLASH_WIDTH, SLASH_HEIGHT)
+        self.life = SLASH_LIFETIME
+        self.anim_timer = 0
+
+    def update(self):
+        self.rect.x += SLASH_SPEED * self.direction
+        self.life -= 1
+        self.anim_timer += 1
+
+    def is_alive(self) -> bool:
+        return self.life > 0 and -50 < self.rect.x < SCREEN_WIDTH + 50
+
+    def draw(self, surface: pygame.Surface):
+        # 劍氣主體 — 發光淡藍弧形
+        alpha = max(40, int(255 * (self.life / SLASH_LIFETIME)))
+        wave = math.sin(self.anim_timer * 0.6) * 2
+
+        # 外光暈
+        glow = pygame.Surface((SLASH_WIDTH + 12, SLASH_HEIGHT + 12), pygame.SRCALPHA)
+        pygame.draw.ellipse(glow, (100, 180, 255, alpha // 3),
+                            (0, 0, SLASH_WIDTH + 12, SLASH_HEIGHT + 12))
+        surface.blit(glow, (self.rect.x - 6, self.rect.y - 6 + wave))
+
+        # 劍氣本體
+        slash_surf = pygame.Surface((SLASH_WIDTH, SLASH_HEIGHT), pygame.SRCALPHA)
+        pygame.draw.ellipse(slash_surf, (*SLASH_COLOR, alpha),
+                            (0, int(wave), SLASH_WIDTH, SLASH_HEIGHT))
+        # 中心亮線
+        pygame.draw.line(slash_surf, (255, 255, 255, alpha),
+                         (4, SLASH_HEIGHT // 2 + int(wave)),
+                         (SLASH_WIDTH - 4, SLASH_HEIGHT // 2 + int(wave)), 2)
+        surface.blit(slash_surf, self.rect.topleft)
+
+
+# --------------- 敵人類別 ---------------
+class Enemy:
+    """紫色魔物敵人，在平台上左右巡邏。"""
+
+    def __init__(self, platform: Platform):
+        # 隨機放在平台上
+        x = random.randint(int(platform.rect.x + 10),
+                           max(int(platform.rect.x + 11), int(platform.rect.right - ENEMY_WIDTH - 10)))
+        y = platform.rect.top - ENEMY_HEIGHT
+        self.rect = pygame.Rect(x, y, ENEMY_WIDTH, ENEMY_HEIGHT)
+        self.platform = platform
+        self.speed = ENEMY_SPEED * random.choice([-1, 1])
+        self.alive = True
+        self.anim_timer = random.randint(0, 100)
+        # 死亡動畫
+        self.dying = False
+        self.death_timer = 0
+
+    def update(self):
+        if self.dying:
+            self.death_timer += 1
+            return
+
+        self.anim_timer += 1
+        # 在平台上左右巡邏
+        self.rect.x += self.speed
+        # 碰到平台邊緣就轉向
+        if self.rect.left <= self.platform.rect.left + 5:
+            self.speed = abs(self.speed)
+        elif self.rect.right >= self.platform.rect.right - 5:
+            self.speed = -abs(self.speed)
+
+    def kill(self):
+        """開始死亡動畫。"""
+        self.dying = True
+        self.death_timer = 0
+
+    def is_finished(self) -> bool:
+        """死亡動畫播完。"""
+        return self.dying and self.death_timer > 15
+
+    def draw(self, surface: pygame.Surface):
+        r = self.rect
+
+        if self.dying:
+            # 死亡動畫：閃爍 + 縮小
+            if self.death_timer % 4 < 2:
+                return  # 閃爍
+            shrink = self.death_timer * 2
+            dr = pygame.Rect(r.x + shrink // 2, r.y + shrink // 2,
+                             max(2, r.w - shrink), max(2, r.h - shrink))
+            pygame.draw.rect(surface, (255, 200, 100), dr)
+            return
+
+        bob = int(math.sin(self.anim_timer * 0.08) * 3)  # 上下浮動
+
+        # 身體（紫色）
+        body_rect = pygame.Rect(r.x + 2, r.y + 8 + bob, r.w - 4, r.h - 8)
+        pygame.draw.rect(surface, ENEMY_COLOR, body_rect)
+        # 明亮邊緣
+        pygame.draw.rect(surface, (160, 80, 200), (r.x + 2, r.y + 8 + bob, r.w - 4, 4))
+
+        # 紅色眼睛（兩隻）
+        eye_y = r.y + 14 + bob
+        pygame.draw.rect(surface, ENEMY_EYE, (r.x + 6, eye_y, 4, 4))
+        pygame.draw.rect(surface, ENEMY_EYE, (r.x + r.w - 10, eye_y, 4, 4))
+        # 瞳孔
+        pygame.draw.rect(surface, (255, 255, 200), (r.x + 7, eye_y + 1, 2, 2))
+        pygame.draw.rect(surface, (255, 255, 200), (r.x + r.w - 9, eye_y + 1, 2, 2))
+
+        # 小角（魔物特徵）
+        pygame.draw.polygon(surface, (100, 30, 140), [
+            (r.x + 5, r.y + 8 + bob), (r.x + 8, r.y + bob), (r.x + 11, r.y + 8 + bob)
+        ])
+        pygame.draw.polygon(surface, (100, 30, 140), [
+            (r.x + r.w - 11, r.y + 8 + bob), (r.x + r.w - 8, r.y + bob),
+            (r.x + r.w - 5, r.y + 8 + bob)
+        ])
 
 
 # --------------- 生成新平台 ---------------
@@ -383,10 +616,13 @@ def main():
             platforms.append(generate_platform(platforms[-1]))
 
         player = Player(100, start_platform.rect.top - PLAYER_HEIGHT)
-        return player, platforms, 0  # 回傳 (玩家, 平台列表, 距離分數)
+        slashes: list[SlashProjectile] = []
+        enemies: list[Enemy] = []
+        return player, platforms, 0, slashes, enemies
 
-    player, platforms, score = reset_game()
+    player, platforms, score, slashes, enemies = reset_game()
     game_over = False
+    enemy_spawn_timer = 0
 
     # ======== 遊戲主迴圈 ========
     while True:
@@ -398,35 +634,81 @@ def main():
 
             # Game Over 狀態下按任意鍵重新開始
             if event.type == pygame.KEYDOWN and game_over:
-                player, platforms, score = reset_game()
+                player, platforms, score, slashes, enemies = reset_game()
+                enemy_spawn_timer = 0
                 game_over = False
 
         if not game_over:
             # ---- 2. 更新狀態 ----
             keys = pygame.key.get_pressed()
-            player.handle_input(keys)
+            player.handle_input(keys, slashes)
             player.update_stamina()
             player.update_animation()
+            player.update_invincible()
             player.apply_gravity()
             player.check_platform_collision(platforms)
 
+            # -- 更新劍氣 --
+            for s in slashes:
+                s.update()
+            slashes = [s for s in slashes if s.is_alive()]
+
+            # -- 更新敵人 --
+            for e in enemies:
+                e.update()
+            enemies = [e for e in enemies if not e.is_finished()]
+
+            # -- 劍氣 vs 敵人 碰撞 --
+            for s in slashes[:]:
+                for e in enemies:
+                    if not e.dying and s.rect.colliderect(e.rect):
+                        e.kill()
+                        score += ENEMY_KILL_SCORE
+                        s.life = 0  # 劍氣命中後消失
+                        break
+
+            # -- 敵人 vs 玩家 碰撞 --
+            for e in enemies:
+                if not e.dying and player.rect.colliderect(e.rect):
+                    player.take_damage()
+
             # -- 攝影機捲軸 --
-            # 當玩家超過畫面左 1/3 處時，世界向左移動
             if player.rect.x > SCROLL_THRESHOLD:
                 shift = player.rect.x - SCROLL_THRESHOLD
                 player.rect.x = SCROLL_THRESHOLD
-                score += shift  # 累計距離分數
+                score += shift
 
                 for plat in platforms:
                     plat.rect.x -= shift
+                for s in slashes:
+                    s.rect.x -= shift
+                for e in enemies:
+                    e.rect.x -= shift
+                    e.platform.rect.x -= 0  # platform 已經在上面調過了
 
             # -- 生成新平台 --
-            # 當最右邊的平台快要進入畫面時，繼續生成新的
             while platforms[-1].rect.right < SCREEN_WIDTH + 300:
                 platforms.append(generate_platform(platforms[-1]))
 
-            # -- 移除離開畫面的舊平台 --
+            # -- 生成敵人 --
+            enemy_spawn_timer += 1
+            if enemy_spawn_timer >= ENEMY_SPAWN_INTERVAL:
+                enemy_spawn_timer = 0
+                # 在畫面內的平台上隨機放敵人（避開起始平台和過小的）
+                valid = [p for p in platforms
+                         if p.rect.right > SCREEN_WIDTH * 0.5
+                         and p.rect.w >= ENEMY_WIDTH + 20]
+                if valid:
+                    plat = random.choice(valid)
+                    # 檢查該平台上是否已有敵人
+                    has_enemy = any(e.platform is plat and not e.dying for e in enemies)
+                    if not has_enemy:
+                        enemies.append(Enemy(plat))
+
+            # -- 移除離開畫面的舊平台和敵人 --
             platforms = [p for p in platforms if p.rect.right > -50]
+            enemies = [e for e in enemies
+                       if not e.is_finished() and e.rect.right > -50]
 
             # -- 限制玩家不超出畫面左邊界 --
             if player.rect.left < 0:
@@ -481,6 +763,14 @@ def main():
         for plat in platforms:
             plat.draw(screen)
 
+        # 繪製敵人
+        for e in enemies:
+            e.draw(screen)
+
+        # 繪製劍氣
+        for s in slashes:
+            s.draw(screen)
+
         # 繪製玩家
         player.draw(screen)
 
@@ -491,8 +781,9 @@ def main():
         screen.blit(shadow_text, (17, 17))
         screen.blit(score_text, (15, 15))
 
-        # 繪製體力條
+        # 繪製體力條 & 血量
         player.draw_stamina_bar(screen)
+        player.draw_hp(screen)
 
         # Game Over 畫面
         if game_over:
