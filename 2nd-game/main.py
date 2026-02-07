@@ -3,12 +3,14 @@
 =============================================
 - 方向鍵左右移動
 - 空白鍵跳躍（僅限站在平台上時）
+- 按住 Shift 衝刺（消耗體力）
 - 掉出畫面底部 → Game Over，按任意鍵重新開始
 """
 
 import pygame
 import random
 import sys
+import math
 
 # --------------- 常數設定 ---------------
 SCREEN_WIDTH = 800
@@ -44,8 +46,22 @@ HERO_SWORD_HILT = (160, 130, 50)  # 劍柄（金色）
 PLAYER_WIDTH = 32
 PLAYER_HEIGHT = 48
 PLAYER_SPEED = 5
+SPRINT_SPEED = 9           # 衝刺時的速度
 JUMP_FORCE = -14
 GRAVITY = 0.7
+
+# 體力系統
+STAMINA_MAX = 100.0
+STAMINA_DRAIN = 1.2        # 衝刺時每幀消耗
+STAMINA_REGEN = 0.4        # 非衝刺時每幀恢復
+STAMINA_MIN_TO_SPRINT = 10 # 體力低於此值無法啟動衝刺
+
+# 體力條 UI 顏色
+STAMINA_BAR_BG = (40, 40, 40, 180)
+STAMINA_BAR_GREEN = (50, 200, 80)
+STAMINA_BAR_YELLOW = (220, 200, 40)
+STAMINA_BAR_RED = (200, 50, 50)
+STAMINA_BAR_BORDER = (200, 200, 200)
 
 # 平台設定（石橋風格，較厚）
 PLATFORM_HEIGHT = 32
@@ -107,7 +123,7 @@ class Platform:
 
 # --------------- 玩家類別（勇者） ---------------
 class Player:
-    """勇者角色，具備移動、跳躍與重力。使用幾何圖形繪製。"""
+    """勇者角色，具備移動、衝刺、跳躍、體力與奔跑動畫。"""
 
     def __init__(self, x: float, y: float):
         self.rect = pygame.Rect(x, y, PLAYER_WIDTH, PLAYER_HEIGHT)
@@ -115,17 +131,54 @@ class Player:
         self.on_ground: bool = False    # 是否站在平台上
         self.facing_right: bool = True  # 面朝方向
 
+        # 衝刺 & 體力
+        self.sprinting: bool = False
+        self.stamina: float = STAMINA_MAX
+
+        # 奔跑動畫計時器
+        self.anim_timer: float = 0.0    # 持續遞增的計時器
+        self.is_moving: bool = False    # 這一幀是否有水平移動
+
     def handle_input(self, keys):
-        """根據鍵盤輸入更新水平移動與跳躍。"""
+        """根據鍵盤輸入更新移動、衝刺與跳躍。"""
+        self.is_moving = False
+
+        # 判斷是否衝刺（按住 Shift 且體力足夠）
+        want_sprint = (keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT])
+        self.sprinting = want_sprint and self.stamina > STAMINA_MIN_TO_SPRINT
+
+        speed = SPRINT_SPEED if self.sprinting else PLAYER_SPEED
+
         if keys[pygame.K_LEFT]:
-            self.rect.x -= PLAYER_SPEED
+            self.rect.x -= speed
             self.facing_right = False
+            self.is_moving = True
         if keys[pygame.K_RIGHT]:
-            self.rect.x += PLAYER_SPEED
+            self.rect.x += speed
             self.facing_right = True
+            self.is_moving = True
         if keys[pygame.K_SPACE] and self.on_ground:
             self.vel_y = JUMP_FORCE
             self.on_ground = False
+
+    def update_stamina(self):
+        """更新體力：衝刺時消耗，否則緩慢恢復。"""
+        if self.sprinting and self.is_moving:
+            self.stamina = max(0, self.stamina - STAMINA_DRAIN)
+            if self.stamina <= 0:
+                self.sprinting = False
+        else:
+            self.stamina = min(STAMINA_MAX, self.stamina + STAMINA_REGEN)
+
+    def update_animation(self):
+        """更新奔跑動畫計時器。"""
+        if self.is_moving and self.on_ground:
+            # 衝刺時動畫更快
+            speed_mult = 1.8 if self.sprinting else 1.0
+            self.anim_timer += speed_mult
+        elif self.on_ground:
+            # 站立時緩慢歸零（呈現微微呼吸感）
+            self.anim_timer *= 0.8
 
     def apply_gravity(self):
         """套用重力讓玩家往下掉。"""
@@ -137,7 +190,6 @@ class Player:
         self.on_ground = False
         for plat in platforms:
             if self.rect.colliderect(plat.rect):
-                # 只在「從上方落下」時才站上去
                 if self.vel_y >= 0 and self.rect.bottom <= plat.rect.top + self.vel_y + 10:
                     self.rect.bottom = plat.rect.top
                     self.vel_y = 0
@@ -149,62 +201,143 @@ class Player:
         return self.rect.top > SCREEN_HEIGHT
 
     def draw(self, surface: pygame.Surface):
-        """用幾何圖形繪製勇者角色。"""
+        """用幾何圖形繪製勇者角色（含奔跑動畫）。"""
         r = self.rect
-        cx = r.centerx  # 角色中心 x
+        cx = r.centerx
         flip = 1 if self.facing_right else -1
 
-        # --- 披風（在身體後面，紅色） ---
-        cape_x = cx - 6 * flip
+        # === 奔跑動畫偏移量 ===
+        # 用 sin 波計算腿部與手臂的擺動幅度
+        if self.is_moving and self.on_ground:
+            swing = math.sin(self.anim_timer * 0.4)   # -1 ~ 1 的擺動
+        elif not self.on_ground:
+            swing = 0.3  # 跳躍中腿微張
+        else:
+            swing = 0  # 站立
+
+        leg_spread = int(swing * 6)    # 腿前後擺動幅度
+        arm_swing = int(swing * 5)     # 手臂前後擺動幅度
+        body_bob = int(abs(swing) * 2) # 身體上下微彈
+
+        # 衝刺特效：身體前傾
+        lean = 3 * flip if (self.sprinting and self.is_moving) else 0
+
+        # --- 衝刺殘影特效 ---
+        if self.sprinting and self.is_moving:
+            ghost_surf = pygame.Surface((PLAYER_WIDTH + 30, PLAYER_HEIGHT + 10), pygame.SRCALPHA)
+            ghost_cx = PLAYER_WIDTH // 2 + 15
+            ghost_y = 5
+            # 半透明殘影身體
+            pygame.draw.rect(ghost_surf, (*HERO_CAPE, 60),
+                             (ghost_cx - 9, ghost_y + 14, 18, 21))
+            pygame.draw.rect(ghost_surf, (*HERO_TUNIC, 40),
+                             (ghost_cx - 7, ghost_y + 16, 14, 18))
+            surface.blit(ghost_surf, (r.x - 15 - 8 * flip, r.y - 5))
+
+        by = r.y - body_bob  # 身體 y（含上下彈跳）
+
+        # --- 披風（紅色，衝刺時飄得更遠） ---
+        cape_x = cx - 6 * flip + lean
+        cape_length = 42 if (self.sprinting and self.is_moving) else 36
+        cape_wave = int(math.sin(self.anim_timer * 0.5) * 3)  # 披風飄動
         cape_points = [
-            (cape_x, r.y + 14),
-            (cape_x - 8 * flip, r.y + 38),
-            (cape_x - 2 * flip, r.y + 42),
-            (cape_x + 4 * flip, r.y + 36),
+            (cape_x, by + 14),
+            (cape_x - (10 + cape_wave) * flip, by + cape_length),
+            (cape_x - (4 + cape_wave) * flip, by + cape_length + 4),
+            (cape_x + 4 * flip, by + 34),
         ]
         pygame.draw.polygon(surface, HERO_CAPE, cape_points)
 
-        # --- 靴子 ---
-        boot_w, boot_h = 8, 6
-        pygame.draw.rect(surface, HERO_BOOTS, (cx - 9, r.bottom - boot_h, boot_w, boot_h))
-        pygame.draw.rect(surface, HERO_BOOTS, (cx + 1, r.bottom - boot_h, boot_w, boot_h))
-
-        # --- 腿（膚色） ---
-        pygame.draw.rect(surface, HERO_SKIN, (cx - 7, r.y + 34, 5, 8))
-        pygame.draw.rect(surface, HERO_SKIN, (cx + 2, r.y + 34, 5, 8))
+        # --- 腿（帶奔跑擺動動畫） ---
+        # 後腿
+        back_leg_x = cx - 4 - leg_spread + lean
+        pygame.draw.rect(surface, HERO_SKIN, (back_leg_x, by + 34, 5, 8))
+        pygame.draw.rect(surface, HERO_BOOTS, (back_leg_x - 1, by + 42, 7, 6))
+        # 前腿
+        front_leg_x = cx + 0 + leg_spread + lean
+        pygame.draw.rect(surface, HERO_SKIN, (front_leg_x, by + 34, 5, 8))
+        pygame.draw.rect(surface, HERO_BOOTS, (front_leg_x - 1, by + 42, 7, 6))
 
         # --- 身體 / 戰衣（藍色） ---
-        pygame.draw.rect(surface, HERO_TUNIC, (cx - 9, r.y + 14, 18, 21))
+        pygame.draw.rect(surface, HERO_TUNIC, (cx - 9 + lean, by + 14, 18, 21))
         # 腰帶
-        pygame.draw.rect(surface, HERO_BELT, (cx - 9, r.y + 28, 18, 4))
-        # 腰帶扣（小亮點）
-        pygame.draw.rect(surface, (220, 190, 80), (cx - 2, r.y + 29, 4, 2))
+        pygame.draw.rect(surface, HERO_BELT, (cx - 9 + lean, by + 28, 18, 4))
+        # 腰帶扣
+        pygame.draw.rect(surface, (220, 190, 80), (cx - 2 + lean, by + 29, 4, 2))
 
-        # --- 手臂（膚色） ---
-        pygame.draw.rect(surface, HERO_SKIN, (cx - 12, r.y + 16, 4, 14))
-        pygame.draw.rect(surface, HERO_SKIN, (cx + 8, r.y + 16, 4, 14))
+        # --- 手臂（帶擺動動畫） ---
+        # 後手臂
+        back_arm_y = by + 16 - arm_swing
+        pygame.draw.rect(surface, HERO_SKIN, (cx - 12 + lean, back_arm_y, 4, 14))
+        # 前手臂
+        front_arm_y = by + 16 + arm_swing
+        pygame.draw.rect(surface, HERO_SKIN, (cx + 8 + lean, front_arm_y, 4, 14))
 
         # --- 頭部 ---
-        head_y = r.y + 2
-        # 頭髮（棕色，稍大）
-        pygame.draw.rect(surface, HERO_HAIR, (cx - 7, head_y, 14, 6))
-        pygame.draw.rect(surface, HERO_HAIR, (cx - 8, head_y + 2, 16, 4))
-        # 臉（膚色）
-        pygame.draw.rect(surface, HERO_SKIN, (cx - 6, head_y + 4, 12, 10))
+        head_y = by + 2
+        # 頭髮
+        pygame.draw.rect(surface, HERO_HAIR, (cx - 7 + lean, head_y, 14, 6))
+        pygame.draw.rect(surface, HERO_HAIR, (cx - 8 + lean, head_y + 2, 16, 4))
+        # 臉
+        pygame.draw.rect(surface, HERO_SKIN, (cx - 6 + lean, head_y + 4, 12, 10))
         # 眼睛
-        eye_x = cx + 3 * flip
+        eye_x = cx + 3 * flip + lean
         pygame.draw.rect(surface, (30, 30, 30), (eye_x, head_y + 7, 2, 2))
 
-        # --- 劍（持劍手那邊） ---
-        sword_x = cx + 11 * flip
-        # 劍身
-        pygame.draw.rect(surface, HERO_SWORD, (sword_x, r.y + 10, 2, 18))
-        # 劍尖
+        # --- 劍 ---
+        sword_x = cx + 11 * flip + lean
+        sword_bob = -arm_swing if self.facing_right else arm_swing
+        sy = by + 10 + sword_bob
+        pygame.draw.rect(surface, HERO_SWORD, (sword_x, sy, 2, 18))
         pygame.draw.polygon(surface, HERO_SWORD, [
-            (sword_x, r.y + 10), (sword_x + 1, r.y + 6), (sword_x + 2, r.y + 10)
+            (sword_x, sy), (sword_x + 1, sy - 4), (sword_x + 2, sy)
         ])
-        # 劍柄 / 護手
-        pygame.draw.rect(surface, HERO_SWORD_HILT, (sword_x - 2, r.y + 28, 6, 3))
+        pygame.draw.rect(surface, HERO_SWORD_HILT, (sword_x - 2, sy + 18, 6, 3))
+
+        # --- 衝刺時腳下揚塵粒子 ---
+        if self.sprinting and self.is_moving and self.on_ground:
+            for _ in range(3):
+                dx = random.randint(-12, -2) * flip
+                dy = random.randint(-4, 2)
+                size = random.randint(2, 4)
+                alpha = random.randint(60, 120)
+                dust = pygame.Surface((size, size), pygame.SRCALPHA)
+                dust.fill((180, 170, 150, alpha))
+                surface.blit(dust, (cx + dx - size // 2, r.bottom + dy - size))
+
+    def draw_stamina_bar(self, surface: pygame.Surface):
+        """在畫面左上角繪製體力條。"""
+        bar_x, bar_y = 15, 48
+        bar_w, bar_h = 160, 12
+
+        # 背景
+        bg = pygame.Surface((bar_w + 4, bar_h + 4), pygame.SRCALPHA)
+        bg.fill(STAMINA_BAR_BG)
+        surface.blit(bg, (bar_x - 2, bar_y - 2))
+
+        # 體力比例
+        ratio = self.stamina / STAMINA_MAX
+        fill_w = int(bar_w * ratio)
+
+        # 根據體力量變色
+        if ratio > 0.5:
+            color = STAMINA_BAR_GREEN
+        elif ratio > 0.25:
+            color = STAMINA_BAR_YELLOW
+        else:
+            color = STAMINA_BAR_RED
+
+        # 填充
+        if fill_w > 0:
+            pygame.draw.rect(surface, color, (bar_x, bar_y, fill_w, bar_h))
+
+        # 邊框
+        pygame.draw.rect(surface, STAMINA_BAR_BORDER, (bar_x - 1, bar_y - 1, bar_w + 2, bar_h + 2), 1)
+
+        # 標籤
+        small_font = pygame.font.SysFont(None, 20)
+        label = small_font.render("STAMINA", True, WHITE)
+        surface.blit(label, (bar_x + bar_w + 8, bar_y - 1))
 
 
 # --------------- 生成新平台 ---------------
@@ -272,6 +405,8 @@ def main():
             # ---- 2. 更新狀態 ----
             keys = pygame.key.get_pressed()
             player.handle_input(keys)
+            player.update_stamina()
+            player.update_animation()
             player.apply_gravity()
             player.check_platform_collision(platforms)
 
@@ -355,6 +490,9 @@ def main():
         score_text = font.render(score_str, True, WHITE)
         screen.blit(shadow_text, (17, 17))
         screen.blit(score_text, (15, 15))
+
+        # 繪製體力條
+        player.draw_stamina_bar(screen)
 
         # Game Over 畫面
         if game_over:
