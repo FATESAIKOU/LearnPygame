@@ -9,29 +9,32 @@ Windows 使用者請安裝 windows-curses：pip install windows-curses
 """
 
 import curses
+import locale
 import sys
 
 from renderer import init_colors
 from game import Game
 from constants import SCREEN_WIDTH, SCREEN_HEIGHT
 
+# 啟用終端機 UTF-8 支援（方框字元、特殊符號）
+locale.setlocale(locale.LC_ALL, "")
+
 
 def main(stdscr):
-    # 取得終端機尺寸
     h, w = stdscr.getmaxyx()
-    required_h = SCREEN_HEIGHT + 2
+    # 含邊框與標題的最小尺寸：(SCREEN_WIDTH+2) × (SCREEN_HEIGHT+5)
+    required_h = SCREEN_HEIGHT + 5
     required_w = SCREEN_WIDTH + 2
     if h < required_h or w < required_w:
         stdscr.addstr(
             0, 0,
-            f"終端機太小！需要至少 {required_w}x{required_h}，"
-            f"目前 {w}x{h}。請放大視窗後重新執行。"
+            f"Terminal too small! Need at least {required_w}x{required_h}, "
+            f"currently {w}x{h}. Please resize and restart."
         )
         stdscr.getch()
         return
 
-    # 初始化
-    curses.curs_set(0)       # 隱藏游標
+    curses.curs_set(0)   # 隱藏游標
     init_colors()
 
     game = Game(stdscr)

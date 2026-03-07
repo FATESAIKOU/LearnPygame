@@ -2,59 +2,68 @@
 constants.py - 遊戲常數設定
 """
 
-# 畫面尺寸
-SCREEN_WIDTH = 50
+# 畫面尺寸（遊戲邏輯座標，不含邊框）
+SCREEN_WIDTH  = 50
 SCREEN_HEIGHT = 24
 
 # 遊戲物理
-GRAVITY = 0.4
-MAX_FALL_SPEED = 3.0
+GRAVITY           = 0.4
+MAX_FALL_SPEED    = 3.0
 PLAYER_MOVE_SPEED = 2
-PLAYER_HP_MAX = 5
+PLAYER_HP_MAX     = 5
 
 # 平台設定
-PLATFORM_MIN_WIDTH = 6
-PLATFORM_MAX_WIDTH = 14
-PLATFORM_SPEED_INITIAL = 0.4   # 平台向上滾動速度（每幀）
-PLATFORM_SPEED_INCREMENT = 0.02  # 每 N 秒難度提升
-PLATFORM_SPAWN_INTERVAL = 5     # 每幾行生成一個平台
-PLATFORM_MOVING_CHANCE = 0.2    # 移動平台機率
-PLATFORM_CRUMBLE_CHANCE = 0.15  # 崩壞平台機率
-PLATFORM_SPRING_CHANCE = 0.1    # 彈簧平台機率
-PLATFORM_DAMAGE_CHANCE = 0.15   # 傷害平台機率
-PLATFORM_HEAL_CHANCE = 0.1      # 補血平台機率
+PLATFORM_MIN_WIDTH       = 6
+PLATFORM_MAX_WIDTH       = 14
+PLATFORM_SPEED_INITIAL   = 0.018   # 每幀向上滾動量（約 1 格 / 3.7 秒 @15fps）
+PLATFORM_SPEED_INCREMENT = 0.003   # 難度提升加速量
+PLATFORM_SPAWN_INTERVAL  = 5       # 每幾格生成一個平台
+PLATFORM_MOVING_CHANCE   = 0.2
+PLATFORM_CRUMBLE_CHANCE  = 0.15
+PLATFORM_SPRING_CHANCE   = 0.1
+PLATFORM_DAMAGE_CHANCE   = 0.15
+PLATFORM_HEAL_CHANCE     = 0.1
 
 # 平台類型
-PLATFORM_NORMAL = "normal"
-PLATFORM_DAMAGE = "damage"
-PLATFORM_HEAL = "heal"
+PLATFORM_NORMAL  = "normal"
+PLATFORM_DAMAGE  = "damage"
+PLATFORM_HEAL    = "heal"
 PLATFORM_CRUMBLE = "crumble"
-PLATFORM_SPRING = "spring"
-PLATFORM_MOVING = "moving"
+PLATFORM_SPRING  = "spring"
+PLATFORM_MOVING  = "moving"
 
-# 字元符號
-CHAR_PLAYER = "@"
-CHAR_PLATFORM_NORMAL = "="
-CHAR_PLATFORM_DAMAGE = "X"
-CHAR_PLATFORM_HEAL = "+"
+# 遊戲元素字元
+CHAR_PLAYER           = "@"
+CHAR_PLATFORM_NORMAL  = "="
+CHAR_PLATFORM_DAMAGE  = "#"
+CHAR_PLATFORM_HEAL    = "+"
 CHAR_PLATFORM_CRUMBLE = "~"
-CHAR_PLATFORM_SPRING = "^"
-CHAR_PLATFORM_MOVING = "-"
-CHAR_EMPTY = " "
-CHAR_WALL = "|"
+CHAR_PLATFORM_SPRING  = "^"
+CHAR_PLATFORM_MOVING  = "-"
+CHAR_EMPTY            = " "
+
+# 邊框字元（雙線方框）
+CHAR_BORDER_TL = "\u2554"   # ╔
+CHAR_BORDER_TR = "\u2557"   # ╗
+CHAR_BORDER_BL = "\u255a"   # ╚
+CHAR_BORDER_BR = "\u255d"   # ╝
+CHAR_BORDER_H  = "\u2550"   # ═
+CHAR_BORDER_V  = "\u2551"   # ║
+CHAR_BORDER_ML = "\u2560"   # ╠
+CHAR_BORDER_MR = "\u2563"   # ╣
 
 # 遊戲狀態
-STATE_MENU = "menu"
-STATE_PLAYING = "playing"
-STATE_PAUSED = "paused"
+STATE_MENU     = "menu"
+STATE_PLAYING  = "playing"
+STATE_PAUSED   = "paused"
 STATE_GAMEOVER = "gameover"
 
 # FPS / 時間
 TARGET_FPS = 15
 
-# 排行榜紀錄上限
-LEADERBOARD_MAX = 5
+# 排行榜
+LEADERBOARD_MAX  = 5
 LEADERBOARD_FILE = "scores.json"
 
-# 難度提升週期（幀數）
-DIFFICULTY_INTERVAL = 150
+# 難度提升週期（幀數）—— 每 300 幀 (~20 秒) 提升一次
+DIFFICULTY_INTERVAL = 300

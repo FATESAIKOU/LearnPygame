@@ -130,10 +130,11 @@ class Game:
         gs.frame += 1
 
         # 渲染
-        render_game(self.win, gs.player, gs.platforms, gs.score, gs.level, gs.frame)
+        render_game(self.win, gs.player, gs.platforms, gs.score, gs.level,
+                    gs.frame, gs.platform_speed)
 
-        # 死亡判定
-        if not gs.player.alive or gs.player.y > SCREEN_HEIGHT:
+        # 死亡判定：掉出底部 或 被捲出頂部 或 HP 歸零
+        if not gs.player.alive or gs.player.y > SCREEN_HEIGHT or gs.player.y < -1:
             self._end_game()
 
     def _handle_paused(self, keys):
