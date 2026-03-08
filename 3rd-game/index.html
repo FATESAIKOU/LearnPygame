@@ -306,13 +306,27 @@ const PLATFORM_H = 14;
 const MIN_PLATFORM_W = 70;
 const MAX_PLATFORM_W = 130;
 const GRAVITY = 0.38;
-const MOVE_SPEED = 1.5;
+const MOVE_SPEED = 3.0;
 const MAX_FALL_SPEED = 10;
 const INITIAL_SCROLL_SPEED = 0.5;
 const SCROLL_INTERVAL = 4000; // ms between scroll speed increases
 const MAX_HP = 5;
 const SPIKE_H = 30;
 const FPS = 60;
+
+// Power-up system
+const POWERUP_SIZE = 24;
+const POWERUP_SPAWN_INTERVAL_MIN = 6;
+const POWERUP_SPAWN_INTERVAL_MAX = 14;
+const POWERUP_TYPES = {
+  SHIELD:     { id: 'shield',     icon: '🛡️', label: '護盾',   color: '#ffd700', duration: 5,  desc: '無敵' },
+  SPEED:      { id: 'speed',      icon: '⚡',  label: '加速',   color: '#00ffff', duration: 6,  desc: '移動加速' },
+  SLOW:       { id: 'slow',       icon: '❄️',  label: '減速',   color: '#88ccff', duration: 6,  desc: '捲動減速' },
+  SCORE_X2:   { id: 'score_x2',   icon: '⭐',  label: '雙倍分', color: '#ffaa00', duration: 8,  desc: '分數x2' },
+  TINY:       { id: 'tiny',       icon: '🔮',  label: '縮小',   color: '#ff44ff', duration: 6,  desc: '體型縮小' },
+  HP_REGEN:   { id: 'hp_regen',   icon: '💖',  label: '回復',   color: '#ff6688', duration: 5,  desc: '持續回血' },
+};
+const POWERUP_LIST = Object.values(POWERUP_TYPES);
 
 const PLATFORM_TYPES = {
   NORMAL:  'normal',
@@ -525,6 +539,24 @@ class Platform {
 }
 
 // ============================================================
+//  POWER-UP ENTITY
+// ============================================================
+class PowerUp {
+  constructor(x, y, type) {
+    this.x = x;
+    this.y = y;
+    this.type = type;
+    this.alive = true;
+    this.age = 0;
+    this.collected = false;
+    this.collectAnim = 0;
+  }
+
+  get cx() { return this.x + POWERUP_SIZE / 2; }
+  get cy() { return this.y + POWERUP_SIZE / 2; }
+}
+
+// ============================================================
 //  GAME STATE
 // ============================================================
 class Game {
@@ -548,6 +580,13 @@ class Game {
     this.bgStars = [];
     this.comboCount = 0;
     this.lastPlatformY = 0;
+
+    // Power-up system
+    this.powerUps = [];
+    this.activeEffects = {};
+    this.powerUpSpawnTimer = 0;
+    this.powerUpSpawnInterval = rand(POWERUP_SPAWN_INTERVAL_MIN, POWERUP_SPAWN_INTERVAL_MAX);
+    this.effectFlashMessages = []; // floating text for collected power-ups
 
     // Input state
     this.keys = {};
@@ -605,6 +644,13 @@ class Game {
     this.screenShake = 0;
     this.comboCount = 0;
 
+    // Reset power-up system
+    this.powerUps = [];
+    this.activeEffects = {};
+    this.powerUpSpawnTimer = 0;
+    this.powerUpSpawnInterval = rand(POWERUP_SPAWN_INTERVAL_MIN, POWERUP_SPAWN_INTERVAL_MAX);
+    this.effectFlashMessages = [];
+
     // Spawn initial platforms
     this.platforms.push(new Platform(CANVAS_W / 2 - 50, 160, 100, PLATFORM_TYPES.NORMAL));
     for (let i = 0; i < 7; i++) {
@@ -648,7 +694,8 @@ class Game {
     }
 
     // Score accumulation
-    this.player.score += dt * (10 + this.difficultyLevel * 2);
+    let scoreMult = this.activeEffects['score_x2'] ? 2 : 1;
+    this.player.score += dt * (10 + this.difficultyLevel * 2) * scoreMult;
     if (this.player.isInvincible) this.player.invincibleTimer -= dt;
 
     // -- Player horizontal movement --
@@ -659,6 +706,16 @@ class Game {
     if (moveRight) moveDir += 1;
 
     let effectiveSpeed = MOVE_SPEED;
+
+    // Speed boost effect
+    if (this.activeEffects['speed']) {
+      effectiveSpeed *= 1.8;
+    }
+
+    // Tiny effect (slightly faster movement)
+    if (this.activeEffects['tiny']) {
+      effectiveSpeed *= 1.15;
+    }
 
     // Conveyor belt effect: belt drags player and modifies move speed
     if (this.player.onPlatform && this.player.onPlatform.type === PLATFORM_TYPES.MOVING) {
@@ -691,6 +748,9 @@ class Game {
     if (this.player.x > CANVAS_W) this.player.x = -PLAYER_W;
 
     // -- Gravity --
+    const isTiny = !!this.activeEffects['tiny'];
+    const pw = isTiny ? PLAYER_W * 0.6 : PLAYER_W;
+    const ph = isTiny ? PLAYER_H * 0.6 : PLAYER_H;
     this.player.vy += GRAVITY;
     this.player.vy = Math.min(this.player.vy, MAX_FALL_SPEED);
     this.player.y += this.player.vy;
@@ -700,13 +760,12 @@ class Game {
     if (this.player.vy >= 0) {
       for (const plat of this.platforms) {
         if (!plat.alive) continue;
-        // Check if player feet land on platform
-        const prevBottom = this.player.bottom - this.player.vy;
-        if (this.player.bottom >= plat.y && prevBottom <= plat.y + 4 &&
-            this.player.x + PLAYER_W > plat.x + 4 &&
+        const playerBottom = this.player.y + ph;
+        const prevBottom = playerBottom - this.player.vy;
+        if (playerBottom >= plat.y && prevBottom <= plat.y + 4 &&
+            this.player.x + pw > plat.x + 4 &&
             this.player.x < plat.right - 4) {
-          // Land on platform
-          this.player.y = plat.y - PLAYER_H;
+          this.player.y = plat.y - ph;
           this.player.vy = 0;
           this.player.onPlatform = plat;
           this.handlePlatformEffect(plat);
@@ -716,7 +775,10 @@ class Game {
     }
 
     // -- Scroll everything up --
-    const scrollAmt = this.scrollSpeed;
+    let scrollAmt = this.scrollSpeed;
+    if (this.activeEffects['slow']) {
+      scrollAmt *= 0.4;
+    }
     for (const plat of this.platforms) {
       plat.y -= scrollAmt;
     }
@@ -724,11 +786,15 @@ class Game {
 
     // -- Spike collision (top) --
     if (this.player.y < SPIKE_H) {
-      this.player.takeDamage(1);
+      if (!this.activeEffects['shield']) {
+        this.player.takeDamage(1);
+        this.screenShake = 0.4;
+        this.particles.emit(this.player.cx, this.player.y, 20, '#f44', 120, 0.5);
+      } else {
+        this.particles.emit(this.player.cx, this.player.y, 15, '#ffd700', 80, 0.4);
+      }
       this.player.y = SPIKE_H;
       this.player.vy = 3;
-      this.screenShake = 0.4;
-      this.particles.emit(this.player.cx, this.player.y, 20, '#f44', 120, 0.5);
     }
 
     // -- Fall off bottom --
@@ -788,6 +854,77 @@ class Game {
     // -- Update particles --
     this.particles.update(dt);
 
+    // -- Power-up spawning --
+    this.powerUpSpawnTimer += dt;
+    if (this.powerUpSpawnTimer >= this.powerUpSpawnInterval) {
+      this.powerUpSpawnTimer = 0;
+      this.powerUpSpawnInterval = rand(POWERUP_SPAWN_INTERVAL_MIN, POWERUP_SPAWN_INTERVAL_MAX);
+      this.spawnPowerUp();
+    }
+
+    // -- Update power-ups (scroll + collection + removal) --
+    for (let i = this.powerUps.length - 1; i >= 0; i--) {
+      const pu = this.powerUps[i];
+      pu.y -= scrollAmt;
+      pu.age += dt;
+
+      // Float animation
+      pu.floatY = Math.sin(pu.age * 3) * 4;
+
+      // Collect check: player AABB vs power-up AABB
+      if (!pu.collected &&
+          this.player.x + PLAYER_W > pu.x &&
+          this.player.x < pu.x + POWERUP_SIZE &&
+          this.player.y + PLAYER_H > pu.y - 4 &&
+          this.player.y < pu.y + POWERUP_SIZE + 4) {
+        pu.collected = true;
+        this.activatePowerUp(pu.type);
+        this.particles.emit(pu.cx, pu.cy, 25, pu.type.color, 120, 0.7);
+        // Flash message
+        this.effectFlashMessages.push({
+          text: `${pu.type.icon} ${pu.type.label}！`,
+          x: pu.cx, y: pu.cy,
+          timer: 1.5, color: pu.type.color,
+        });
+      }
+
+      // Collection animation (fly upward & fade)
+      if (pu.collected) {
+        pu.collectAnim += dt * 3;
+        if (pu.collectAnim > 1) pu.alive = false;
+      }
+
+      // Off screen
+      if (pu.y < -30 || pu.y > CANVAS_H + 30) pu.alive = false;
+    }
+    this.powerUps = this.powerUps.filter(p => p.alive);
+
+    // -- Tick active effects --
+    for (const key of Object.keys(this.activeEffects)) {
+      this.activeEffects[key] -= dt;
+      // HP regen effect: heal 1 HP every 2 seconds
+      if (key === 'hp_regen' && this.activeEffects[key] > 0) {
+        if (!this._regenAccum) this._regenAccum = 0;
+        this._regenAccum += dt;
+        if (this._regenAccum >= 2.0) {
+          this._regenAccum -= 2.0;
+          this.player.heal(1);
+          this.particles.emit(this.player.cx, this.player.cy, 10, '#ff6688', 50, 0.4);
+        }
+      }
+      if (this.activeEffects[key] <= 0) {
+        delete this.activeEffects[key];
+        if (key === 'hp_regen') this._regenAccum = 0;
+      }
+    }
+
+    // -- Update flash messages --
+    for (const msg of this.effectFlashMessages) {
+      msg.timer -= dt;
+      msg.y -= dt * 40;
+    }
+    this.effectFlashMessages = this.effectFlashMessages.filter(m => m.timer > 0);
+
     // -- Update HUD --
     this.updateHUD();
   }
@@ -799,9 +936,13 @@ class Game {
       case PLATFORM_TYPES.DAMAGE:
         if (!plat.effectTriggered) {
           plat.effectTriggered = true;
-          this.player.takeDamage(1);
-          this.screenShake = 0.3;
-          this.particles.emit(this.player.cx, this.player.bottom, 15, '#f44', 100, 0.5);
+          if (!this.activeEffects['shield']) {
+            this.player.takeDamage(1);
+            this.screenShake = 0.3;
+            this.particles.emit(this.player.cx, this.player.bottom, 15, '#f44', 100, 0.5);
+          } else {
+            this.particles.emit(this.player.cx, this.player.bottom, 12, '#ffd700', 60, 0.4);
+          }
         }
         break;
 
@@ -864,6 +1005,18 @@ class Game {
     this.platforms.push(plat);
   }
 
+  spawnPowerUp() {
+    const type = POWERUP_LIST[randInt(0, POWERUP_LIST.length - 1)];
+    const x = rand(30, CANVAS_W - POWERUP_SIZE - 30);
+    const y = CANVAS_H + 10;
+    this.powerUps.push(new PowerUp(x, y, type));
+  }
+
+  activatePowerUp(type) {
+    this.activeEffects[type.id] = type.duration;
+    this.player.score += 25;
+  }
+
   updateHUD() {
     // HP hearts
     let hearts = '';
@@ -910,8 +1063,11 @@ class Game {
     if (this.state === 'playing' || this.state === 'paused' || this.state === 'gameover') {
       this.drawSpikes(ctx);
       this.drawPlatforms(ctx);
+      this.drawPowerUps(ctx);
       this.drawPlayer(ctx);
       this.particles.draw(ctx);
+      this.drawFlashMessages(ctx);
+      this.drawActiveEffectsBar(ctx);
     }
 
     ctx.restore();
@@ -1315,6 +1471,159 @@ class Game {
     ctx.shadowBlur = 0;
   }
 
+  drawPowerUps(ctx) {
+    for (const pu of this.powerUps) {
+      if (!pu.alive) continue;
+      ctx.save();
+
+      const px = pu.x;
+      const py = pu.y + (pu.floatY || 0);
+      const sz = POWERUP_SIZE;
+      const halfSz = sz / 2;
+
+      if (pu.collected) {
+        // Collection animation: fly up, scale up, fade out
+        const t = pu.collectAnim;
+        ctx.globalAlpha = 1 - t;
+        ctx.translate(px + halfSz, py + halfSz);
+        ctx.scale(1 + t * 0.8, 1 + t * 0.8);
+        ctx.translate(-(px + halfSz), -(py + halfSz));
+      }
+
+      // Outer glow ring
+      const glowPulse = 0.4 + 0.3 * Math.sin(pu.age * 4);
+      ctx.shadowBlur = 18;
+      ctx.shadowColor = pu.type.color;
+
+      // Glowing orb background
+      const orbGrad = ctx.createRadialGradient(
+        px + halfSz, py + halfSz, 2,
+        px + halfSz, py + halfSz, halfSz + 4
+      );
+      orbGrad.addColorStop(0, pu.type.color);
+      orbGrad.addColorStop(0.5, pu.type.color + '88');
+      orbGrad.addColorStop(1, 'transparent');
+      ctx.fillStyle = orbGrad;
+      ctx.beginPath();
+      ctx.arc(px + halfSz, py + halfSz, halfSz + 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Inner circle (dark background for icon)
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = 'rgba(10,10,30,0.7)';
+      ctx.beginPath();
+      ctx.arc(px + halfSz, py + halfSz, halfSz - 2, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Spinning ring
+      ctx.strokeStyle = pu.type.color;
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha *= glowPulse + 0.3;
+      ctx.beginPath();
+      ctx.arc(px + halfSz, py + halfSz, halfSz + 1, pu.age * 2, pu.age * 2 + Math.PI * 1.2);
+      ctx.stroke();
+      ctx.globalAlpha = pu.collected ? (1 - pu.collectAnim) : 1;
+
+      // Icon emoji
+      ctx.font = `${sz - 6}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff';
+      ctx.fillText(pu.type.icon, px + halfSz, py + halfSz + 1);
+
+      // Sparkle particles around the orb
+      ctx.fillStyle = pu.type.color;
+      const sparkleCount = 3;
+      for (let s = 0; s < sparkleCount; s++) {
+        const angle = pu.age * 3 + s * (Math.PI * 2 / sparkleCount);
+        const dist = halfSz + 6 + Math.sin(pu.age * 5 + s) * 3;
+        const sx = px + halfSz + Math.cos(angle) * dist;
+        const sy = py + halfSz + Math.sin(angle) * dist;
+        const sparkSize = 1.5 + Math.sin(pu.age * 6 + s * 2) * 0.8;
+        ctx.globalAlpha = 0.5 + 0.3 * Math.sin(pu.age * 4 + s);
+        ctx.beginPath();
+        ctx.arc(sx, sy, sparkSize, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+  }
+
+  drawFlashMessages(ctx) {
+    for (const msg of this.effectFlashMessages) {
+      ctx.save();
+      const alpha = clamp(msg.timer / 0.5, 0, 1);
+      ctx.globalAlpha = alpha;
+      ctx.font = 'bold 18px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = msg.color;
+      ctx.shadowBlur = 12;
+      ctx.shadowColor = msg.color;
+      ctx.fillText(msg.text, msg.x, msg.y);
+      ctx.restore();
+    }
+  }
+
+  drawActiveEffectsBar(ctx) {
+    const keys = Object.keys(this.activeEffects);
+    if (keys.length === 0) return;
+
+    ctx.save();
+    const barY = CANVAS_H - 44;
+    const totalW = keys.length * 50;
+    const startX = (CANVAS_W - totalW) / 2;
+
+    // Semi-transparent backdrop
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    this.roundRect(ctx, startX - 8, barY - 4, totalW + 16, 40, 8);
+    ctx.fill();
+
+    keys.forEach((key, i) => {
+      const info = POWERUP_LIST.find(p => p.id === key);
+      if (!info) return;
+      const x = startX + i * 50 + 25;
+      const remaining = this.activeEffects[key];
+      const ratio = remaining / info.duration;
+
+      // Timer ring
+      ctx.strokeStyle = info.color;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(x, barY + 14, 16, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio);
+      ctx.stroke();
+
+      // Background circle
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.beginPath();
+      ctx.arc(x, barY + 14, 14, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Glow when about to expire
+      if (remaining < 2) {
+        const flash = Math.sin(remaining * 8) * 0.3 + 0.3;
+        ctx.fillStyle = info.color + Math.floor(flash * 255).toString(16).padStart(2, '0');
+        ctx.beginPath();
+        ctx.arc(x, barY + 14, 14, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Icon
+      ctx.font = '16px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff';
+      ctx.fillText(info.icon, x, barY + 15);
+
+      // Timer text
+      ctx.font = 'bold 9px monospace';
+      ctx.fillStyle = remaining < 2 ? '#f88' : '#ccc';
+      ctx.fillText(remaining.toFixed(1), x, barY + 32);
+    });
+
+    ctx.restore();
+  }
+
   drawPlayer(ctx) {
     const p = this.player;
     ctx.save();
@@ -1324,8 +1633,49 @@ class Game {
       ctx.globalAlpha = 0.4;
     }
 
+    const isTiny = !!this.activeEffects['tiny'];
+    const scale = isTiny ? 0.6 : 1;
+
     const cx = p.x + PLAYER_W / 2;
     const cy = p.y + PLAYER_H / 2;
+
+    // Tiny effect scaling
+    if (isTiny) {
+      ctx.translate(cx, cy);
+      ctx.scale(scale, scale);
+      ctx.translate(-cx, -cy);
+    }
+
+    // Shield aura
+    if (this.activeEffects['shield']) {
+      const shieldPulse = 0.3 + 0.2 * Math.sin(this.gameTime * 6);
+      const shieldGrad = ctx.createRadialGradient(cx, cy, 8, cx, cy, 28);
+      shieldGrad.addColorStop(0, `rgba(255,215,0,${shieldPulse * 0.3})`);
+      shieldGrad.addColorStop(0.6, `rgba(255,215,0,${shieldPulse * 0.15})`);
+      shieldGrad.addColorStop(1, 'transparent');
+      ctx.fillStyle = shieldGrad;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 28, 0, Math.PI * 2);
+      ctx.fill();
+      // Shield ring
+      ctx.strokeStyle = `rgba(255,215,0,${shieldPulse + 0.2})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 22, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // Speed boost trail
+    if (this.activeEffects['speed']) {
+      for (let t = 1; t <= 3; t++) {
+        ctx.globalAlpha = 0.15 / t;
+        ctx.fillStyle = '#00ffff';
+        ctx.beginPath();
+        ctx.arc(cx - t * 4 * (p.facingRight ? 1 : -1), cy, 8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = p.isInvincible && Math.floor(p.invincibleTimer * 10) % 2 === 0 ? 0.4 : 1;
+    }
 
     // Player glow
     ctx.shadowBlur = 15;
