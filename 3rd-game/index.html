@@ -306,7 +306,7 @@ const PLATFORM_H = 14;
 const MIN_PLATFORM_W = 70;
 const MAX_PLATFORM_W = 130;
 const GRAVITY = 0.38;
-const MOVE_SPEED = 4.5;
+const MOVE_SPEED = 1.5;
 const MAX_FALL_SPEED = 10;
 const INITIAL_SCROLL_SPEED = 0.5;
 const SCROLL_INTERVAL = 4000; // ms between scroll speed increases
@@ -332,11 +332,11 @@ const COLORS = {
   spikeGlow: 'rgba(255, 34, 68, 0.3)',
   player: '#3af',
   playerGlow: 'rgba(50, 170, 255, 0.5)',
-  platformNormal: '#4a9',
-  platformDamage: '#f44',
-  platformHeal: '#4f4',
-  platformMoving: '#88f',
-  platformCrumble: '#a86',
+  platformNormal: '#7a8b6e',
+  platformDamage: '#888',
+  platformHeal: '#6b4226',
+  platformMoving: '#556',
+  platformCrumble: '#9e6b4a',
   platformSpring: '#ff0',
   text: '#fff',
   particle: '#ffd700',
@@ -930,51 +930,335 @@ class Game {
       const px = plat.x + offsetX;
       const py = plat.y;
 
-      // Platform glow
-      if (plat.glowIntensity > 0) {
-        ctx.shadowBlur = 15 * plat.glowIntensity;
-        ctx.shadowColor = this.getPlatformColor(plat.type);
+      switch (plat.type) {
+        case PLATFORM_TYPES.DAMAGE:
+          this.drawSpikePlatform(ctx, px, py, plat);
+          break;
+        case PLATFORM_TYPES.HEAL:
+          this.drawGrassPlatform(ctx, px, py, plat);
+          break;
+        case PLATFORM_TYPES.MOVING:
+          this.drawConveyorPlatform(ctx, px, py, plat);
+          break;
+        case PLATFORM_TYPES.CRUMBLE:
+          this.drawCrumblePlatform(ctx, px, py, plat);
+          break;
+        case PLATFORM_TYPES.SPRING:
+          this.drawSpringPlatform(ctx, px, py, plat);
+          break;
+        default:
+          this.drawNormalPlatform(ctx, px, py, plat);
+          break;
       }
 
-      // Main body
-      const platGrad = ctx.createLinearGradient(px, py, px, py + plat.h);
-      const baseColor = this.getPlatformColor(plat.type);
-      platGrad.addColorStop(0, this.lighten(baseColor, 30));
-      platGrad.addColorStop(1, this.darken(baseColor, 20));
-      ctx.fillStyle = platGrad;
-
-      // Rounded rectangle
-      this.roundRect(ctx, px, py, plat.w, plat.h, 5);
-      ctx.fill();
-
-      // Top shine
-      ctx.fillStyle = 'rgba(255,255,255,0.15)';
-      this.roundRect(ctx, px + 2, py + 1, plat.w - 4, plat.h / 3, 3);
-      ctx.fill();
-
-      // Type indicator
-      ctx.font = 'bold 11px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillStyle = 'rgba(255,255,255,0.8)';
-      const label = this.getPlatformLabel(plat.type);
-      if (label) {
-        ctx.fillText(label, px + plat.w / 2, py + plat.h - 3);
-      }
-
-      // Shimmer effect for special platforms
-      if (plat.type !== PLATFORM_TYPES.NORMAL) {
-        const shimX = px + (plat.w / 2) + Math.sin(plat.shimmer) * (plat.w / 3);
-        ctx.globalAlpha = 0.3 + 0.2 * Math.sin(plat.shimmer * 2);
-        ctx.fillStyle = '#fff';
-        ctx.beginPath();
-        ctx.arc(shimX, py + plat.h / 2, 2, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.globalAlpha = 1;
-      }
-
-      ctx.shadowBlur = 0;
       ctx.restore();
     }
+  }
+
+  // --- Normal: stone slab ---
+  drawNormalPlatform(ctx, px, py, plat) {
+    const grad = ctx.createLinearGradient(px, py, px, py + plat.h);
+    grad.addColorStop(0, '#8a9a7e');
+    grad.addColorStop(0.5, '#6a7a5e');
+    grad.addColorStop(1, '#5a6a4e');
+    ctx.fillStyle = grad;
+    this.roundRect(ctx, px, py, plat.w, plat.h, 4);
+    ctx.fill();
+    // Stone texture lines
+    ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+    ctx.lineWidth = 1;
+    for (let i = 1; i < 3; i++) {
+      const lx = px + plat.w * i / 3 + Math.sin(plat.shimmer + i) * 2;
+      ctx.beginPath();
+      ctx.moveTo(lx, py + 2);
+      ctx.lineTo(lx + 3, py + plat.h - 2);
+      ctx.stroke();
+    }
+    // Top edge highlight
+    ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+    ctx.beginPath();
+    ctx.moveTo(px + 4, py + 1);
+    ctx.lineTo(px + plat.w - 4, py + 1);
+    ctx.stroke();
+  }
+
+  // --- Damage: metal plate with spikes on top ---
+  drawSpikePlatform(ctx, px, py, plat) {
+    // Dark metal base
+    const grad = ctx.createLinearGradient(px, py, px, py + plat.h);
+    grad.addColorStop(0, '#666');
+    grad.addColorStop(0.4, '#555');
+    grad.addColorStop(1, '#333');
+    ctx.fillStyle = grad;
+    this.roundRect(ctx, px, py + 4, plat.w, plat.h - 4, 3);
+    ctx.fill();
+    // Metal rivets
+    ctx.fillStyle = '#888';
+    for (let rx = px + 8; rx < px + plat.w - 5; rx += 18) {
+      ctx.beginPath();
+      ctx.arc(rx, py + plat.h - 3, 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Spikes on top
+    const spikeCount = Math.floor(plat.w / 12);
+    const spikeW = plat.w / spikeCount;
+    for (let i = 0; i < spikeCount; i++) {
+      const sx = px + i * spikeW;
+      const tipY = py - 5 + Math.sin(this.spikeAnim * 4 + i) * 1.5;
+      const sGrad = ctx.createLinearGradient(sx, tipY, sx, py + 5);
+      sGrad.addColorStop(0, '#ddd');
+      sGrad.addColorStop(0.3, '#aaa');
+      sGrad.addColorStop(1, '#666');
+      ctx.fillStyle = sGrad;
+      ctx.beginPath();
+      ctx.moveTo(sx + 1, py + 5);
+      ctx.lineTo(sx + spikeW / 2, tipY);
+      ctx.lineTo(sx + spikeW - 1, py + 5);
+      ctx.closePath();
+      ctx.fill();
+      // Spike glint
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.beginPath();
+      ctx.arc(sx + spikeW / 2 - 1, tipY + 3, 1, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Danger glow
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = 'rgba(255,50,50,0.3)';
+    ctx.strokeStyle = 'rgba(255,80,80,0.4)';
+    ctx.lineWidth = 1;
+    this.roundRect(ctx, px, py + 4, plat.w, plat.h - 4, 3);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+
+  // --- Heal: earthy platform with grass tufts ---
+  drawGrassPlatform(ctx, px, py, plat) {
+    // Earth/dirt base
+    const grad = ctx.createLinearGradient(px, py, px, py + plat.h);
+    grad.addColorStop(0, '#7a5533');
+    grad.addColorStop(0.4, '#5c3d1e');
+    grad.addColorStop(1, '#4a3018');
+    ctx.fillStyle = grad;
+    this.roundRect(ctx, px, py + 3, plat.w, plat.h - 3, 4);
+    ctx.fill();
+    // Dirt speckles
+    ctx.fillStyle = 'rgba(0,0,0,0.15)';
+    for (let dx = px + 5; dx < px + plat.w - 5; dx += 9) {
+      ctx.beginPath();
+      ctx.arc(dx + Math.sin(dx * 0.7) * 2, py + plat.h - 4, 1.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Green grass top layer
+    const grassGrad = ctx.createLinearGradient(px, py, px, py + 6);
+    grassGrad.addColorStop(0, '#4a2');
+    grassGrad.addColorStop(1, '#3a7a22');
+    ctx.fillStyle = grassGrad;
+    this.roundRect(ctx, px, py + 1, plat.w, 5, 3);
+    ctx.fill();
+    // Grass blades
+    const bladeCount = Math.floor(plat.w / 6);
+    for (let i = 0; i < bladeCount; i++) {
+      const bx = px + 3 + i * (plat.w - 6) / bladeCount;
+      const bh = 5 + Math.sin(plat.shimmer + i * 1.3) * 2.5;
+      const sway = Math.sin(this.spikeAnim * 2 + i * 0.8) * 2;
+      // Blade
+      ctx.strokeStyle = i % 3 === 0 ? '#5d3' : (i % 3 === 1 ? '#4a2' : '#3b8a1a');
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(bx, py + 1);
+      ctx.quadraticCurveTo(bx + sway, py - bh / 2, bx + sway * 1.2, py - bh);
+      ctx.stroke();
+    }
+    // Tiny flowers
+    for (let fx = px + 10; fx < px + plat.w - 10; fx += 22) {
+      const fy = py - 2 + Math.sin(fx * 0.3) * 1;
+      ctx.fillStyle = fx % 44 < 22 ? '#ff8' : '#f8f';
+      ctx.beginPath();
+      ctx.arc(fx, fy, 2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ff0';
+      ctx.beginPath();
+      ctx.arc(fx, fy, 1, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Healing glow
+    const glowAlpha = 0.15 + 0.1 * Math.sin(plat.shimmer * 2);
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = `rgba(80,255,80,${glowAlpha})`;
+    ctx.strokeStyle = `rgba(80,255,80,${glowAlpha + 0.1})`;
+    ctx.lineWidth = 1;
+    this.roundRect(ctx, px, py + 1, plat.w, plat.h - 1, 4);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+
+  // --- Moving: conveyor belt with animated treads ---
+  drawConveyorPlatform(ctx, px, py, plat) {
+    // Metal frame
+    const grad = ctx.createLinearGradient(px, py, px, py + plat.h);
+    grad.addColorStop(0, '#6a6a7a');
+    grad.addColorStop(0.5, '#505060');
+    grad.addColorStop(1, '#404050');
+    ctx.fillStyle = grad;
+    this.roundRect(ctx, px, py, plat.w, plat.h, 4);
+    ctx.fill();
+    // Belt surface (darker inset)
+    ctx.fillStyle = '#333340';
+    ctx.fillRect(px + 4, py + 3, plat.w - 8, plat.h - 6);
+    // Animated tread lines
+    const dir = plat.moveSpeed > 0 ? 1 : -1;
+    const treadOffset = (this.gameTime * 60 * dir) % 12;
+    ctx.strokeStyle = 'rgba(200,200,220,0.35)';
+    ctx.lineWidth = 1.5;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(px + 4, py + 3, plat.w - 8, plat.h - 6);
+    ctx.clip();
+    for (let tx = px - 12 + treadOffset; tx < px + plat.w + 12; tx += 12) {
+      ctx.beginPath();
+      ctx.moveTo(tx, py + 3);
+      ctx.lineTo(tx - 5, py + plat.h - 3);
+      ctx.stroke();
+    }
+    ctx.restore();
+    // Rollers at ends
+    ctx.fillStyle = '#777';
+    ctx.beginPath();
+    ctx.arc(px + 6, py + plat.h / 2, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(px + plat.w - 6, py + plat.h / 2, 4, 0, Math.PI * 2);
+    ctx.fill();
+    // Roller axle
+    ctx.fillStyle = '#555';
+    ctx.beginPath();
+    ctx.arc(px + 6, py + plat.h / 2, 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(px + plat.w - 6, py + plat.h / 2, 2, 0, Math.PI * 2);
+    ctx.fill();
+    // Direction arrow
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.font = 'bold 10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(dir > 0 ? '▶▶' : '◀◀', px + plat.w / 2, py + plat.h - 3);
+    // Edge highlight
+    ctx.strokeStyle = 'rgba(140,140,255,0.3)';
+    ctx.lineWidth = 1;
+    this.roundRect(ctx, px, py, plat.w, plat.h, 4);
+    ctx.stroke();
+  }
+
+  // --- Crumble: cracked brick platform ---
+  drawCrumblePlatform(ctx, px, py, plat) {
+    // Brick base color
+    const grad = ctx.createLinearGradient(px, py, px, py + plat.h);
+    grad.addColorStop(0, '#b87a50');
+    grad.addColorStop(0.5, '#a06838');
+    grad.addColorStop(1, '#8a5828');
+    ctx.fillStyle = grad;
+    this.roundRect(ctx, px, py, plat.w, plat.h, 3);
+    ctx.fill();
+    // Brick pattern
+    ctx.strokeStyle = 'rgba(60,30,10,0.5)';
+    ctx.lineWidth = 1;
+    const brickW = 16;
+    const brickH = plat.h / 2;
+    for (let row = 0; row < 2; row++) {
+      const rowOffset = row % 2 === 0 ? 0 : brickW / 2;
+      for (let bx = px + rowOffset; bx < px + plat.w; bx += brickW) {
+        const bw = Math.min(brickW, px + plat.w - bx);
+        if (bw > 3) {
+          ctx.strokeRect(bx, py + row * brickH, bw, brickH);
+        }
+      }
+    }
+    // Cracks
+    ctx.strokeStyle = 'rgba(30,15,0,0.6)';
+    ctx.lineWidth = 1.5;
+    // Main diagonal crack
+    const crackStartX = px + plat.w * 0.3;
+    ctx.beginPath();
+    ctx.moveTo(crackStartX, py);
+    ctx.lineTo(crackStartX + 5, py + 4);
+    ctx.lineTo(crackStartX + 2, py + 8);
+    ctx.lineTo(crackStartX + 8, py + plat.h);
+    ctx.stroke();
+    // Secondary crack
+    const crack2X = px + plat.w * 0.65;
+    ctx.beginPath();
+    ctx.moveTo(crack2X, py + 2);
+    ctx.lineTo(crack2X - 3, py + 6);
+    ctx.lineTo(crack2X + 4, py + plat.h - 1);
+    ctx.stroke();
+    // Missing chunk corners (darkened)
+    if (plat.crumbling) {
+      const shake = plat.crumbleShake;
+      ctx.fillStyle = 'rgba(0,0,0,0.3)';
+      ctx.fillRect(px + plat.w - 12 + shake, py, 12, 5);
+      ctx.fillRect(px + shake, py + plat.h - 5, 8, 5);
+      // Dust particles around edges
+      ctx.fillStyle = 'rgba(180,130,80,0.5)';
+      for (let d = 0; d < 4; d++) {
+        ctx.beginPath();
+        ctx.arc(
+          px + rand(0, plat.w),
+          py + rand(-3, plat.h + 3),
+          rand(1, 2.5), 0, Math.PI * 2
+        );
+        ctx.fill();
+      }
+    }
+    // Weathered edges
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+    ctx.lineWidth = 1;
+    this.roundRect(ctx, px, py, plat.w, plat.h, 3);
+    ctx.stroke();
+  }
+
+  // --- Spring: bouncy pad ---
+  drawSpringPlatform(ctx, px, py, plat) {
+    // Base plate
+    ctx.fillStyle = '#555';
+    this.roundRect(ctx, px, py + 4, plat.w, plat.h - 4, 3);
+    ctx.fill();
+    // Spring coils
+    const coilCount = Math.floor(plat.w / 14);
+    for (let i = 0; i < coilCount; i++) {
+      const cx = px + 7 + i * (plat.w - 14) / Math.max(1, coilCount - 1);
+      const compress = plat.springUsed ? 2 : 0;
+      const bounce = Math.sin(plat.shimmer * 3) * 1;
+      ctx.strokeStyle = '#dd0';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(cx, py + plat.h - 4);
+      ctx.lineTo(cx - 3, py + 6 + compress + bounce);
+      ctx.lineTo(cx + 3, py + 3 + compress + bounce);
+      ctx.lineTo(cx, py + compress + bounce);
+      ctx.stroke();
+    }
+    // Top pad
+    const padGrad = ctx.createLinearGradient(px, py - 2, px, py + 5);
+    padGrad.addColorStop(0, '#ff4');
+    padGrad.addColorStop(1, '#cc0');
+    ctx.fillStyle = padGrad;
+    this.roundRect(ctx, px + 2, py, plat.w - 4, 5, 2);
+    ctx.fill();
+    // ↑ Arrow indicator
+    ctx.fillStyle = 'rgba(255,255,100,0.7)';
+    ctx.font = 'bold 10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('↑↑', px + plat.w / 2, py + plat.h - 2);
+    // Glow
+    const glowA = 0.15 + 0.1 * Math.sin(plat.shimmer * 2);
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = `rgba(255,255,0,${glowA})`;
+    ctx.strokeStyle = `rgba(255,255,0,${glowA + 0.1})`;
+    ctx.lineWidth = 1;
+    this.roundRect(ctx, px, py, plat.w, plat.h, 3);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
   }
 
   drawPlayer(ctx) {
@@ -1067,14 +1351,7 @@ class Game {
   }
 
   getPlatformLabel(type) {
-    const map = {
-      [PLATFORM_TYPES.DAMAGE]: '⚡ 危險',
-      [PLATFORM_TYPES.HEAL]: '💚 回血',
-      [PLATFORM_TYPES.MOVING]: '↔ 移動',
-      [PLATFORM_TYPES.CRUMBLE]: '💥 崩壞',
-      [PLATFORM_TYPES.SPRING]: '🔺 彈簧',
-    };
-    return map[type] || '';
+    return '';
   }
 
   roundRect(ctx, x, y, w, h, r) {
