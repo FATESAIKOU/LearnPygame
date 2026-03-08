@@ -498,8 +498,14 @@ class Platform {
     this.type = type;
     this.alive = true;
 
-    // Moving platform
-    this.moveSpeed = type === PLATFORM_TYPES.MOVING ? rand(40, 80) * (Math.random() < 0.5 ? 1 : -1) : 0;
+    // Self-movement (can apply to any platform type)
+    this.moveSpeed = 0;
+
+    // Conveyor belt direction (only for MOVING/conveyor type)
+    this.beltDirection = type === PLATFORM_TYPES.MOVING ? (Math.random() < 0.5 ? 1 : -1) : 0;
+
+    // One-time effect flag (for damage/heal)
+    this.effectTriggered = false;
 
     // Crumble
     this.crumbleTimer = 0;
@@ -648,13 +654,29 @@ class Game {
     // -- Player horizontal movement --
     const moveLeft = this.keys['a'] || this.keys['arrowleft'];
     const moveRight = this.keys['d'] || this.keys['arrowright'];
-    if (moveLeft) {
-      this.player.x -= MOVE_SPEED;
-      this.player.facingRight = false;
+    let moveDir = 0;
+    if (moveLeft) moveDir -= 1;
+    if (moveRight) moveDir += 1;
+
+    let effectiveSpeed = MOVE_SPEED;
+
+    // Conveyor belt effect: belt drags player and modifies move speed
+    if (this.player.onPlatform && this.player.onPlatform.type === PLATFORM_TYPES.MOVING) {
+      const belt = this.player.onPlatform.beltDirection;
+      const CONVEYOR_DRAG = 1.0;
+      this.player.x += belt * CONVEYOR_DRAG;
+      if (moveDir !== 0) {
+        if (moveDir === belt) {
+          effectiveSpeed = MOVE_SPEED * 1.6; // boosted with belt
+        } else {
+          effectiveSpeed = MOVE_SPEED * 0.35; // slowed against belt
+        }
+      }
     }
-    if (moveRight) {
-      this.player.x += MOVE_SPEED;
-      this.player.facingRight = true;
+
+    if (moveDir !== 0) {
+      this.player.x += moveDir * effectiveSpeed;
+      this.player.facingRight = moveDir > 0;
     }
     if (moveLeft || moveRight) {
       this.player.walkTimer += dt;
@@ -726,13 +748,14 @@ class Game {
       plat.shimmer += dt * 3;
       plat.glowIntensity = Math.max(0, plat.glowIntensity - dt * 3);
 
-      if (plat.type === PLATFORM_TYPES.MOVING) {
+      // Self-movement applies to any platform with moveSpeed != 0
+      if (plat.moveSpeed !== 0) {
         plat.x += plat.moveSpeed * dt;
         if (plat.x < 10) { plat.x = 10; plat.moveSpeed *= -1; }
         if (plat.right > CANVAS_W - 10) { plat.x = CANVAS_W - 10 - plat.w; plat.moveSpeed *= -1; }
 
-        // Move player with platform
-        if (this.player.onPlatform === plat) {
+        // Move player with platform (conveyor uses belt mechanic instead)
+        if (this.player.onPlatform === plat && plat.type !== PLATFORM_TYPES.MOVING) {
           this.player.x += plat.moveSpeed * dt;
         }
       }
@@ -774,15 +797,21 @@ class Game {
 
     switch (plat.type) {
       case PLATFORM_TYPES.DAMAGE:
-        this.player.takeDamage(1);
-        this.screenShake = 0.3;
-        this.particles.emit(this.player.cx, this.player.bottom, 15, '#f44', 100, 0.5);
+        if (!plat.effectTriggered) {
+          plat.effectTriggered = true;
+          this.player.takeDamage(1);
+          this.screenShake = 0.3;
+          this.particles.emit(this.player.cx, this.player.bottom, 15, '#f44', 100, 0.5);
+        }
         break;
 
       case PLATFORM_TYPES.HEAL:
-        this.player.heal(1);
-        this.particles.emit(this.player.cx, this.player.bottom, 20, '#4f4', 80, 0.6);
-        this.player.score += 50;
+        if (!plat.effectTriggered) {
+          plat.effectTriggered = true;
+          this.player.heal(1);
+          this.particles.emit(this.player.cx, this.player.bottom, 20, '#4f4', 80, 0.6);
+          this.player.score += 50;
+        }
         break;
 
       case PLATFORM_TYPES.SPRING:
@@ -824,7 +853,15 @@ class Game {
     else if (r < 0.90) type = PLATFORM_TYPES.SPRING;
     else type = PLATFORM_TYPES.HEAL;
 
-    this.platforms.push(new Platform(x, y, w, type));
+    const plat = new Platform(x, y, w, type);
+
+    // Any platform can self-move (chance increases with difficulty)
+    const selfMoveChance = 0.2 + Math.min(this.difficultyLevel * 0.03, 0.25);
+    if (Math.random() < selfMoveChance) {
+      plat.moveSpeed = rand(30, 60) * (Math.random() < 0.5 ? 1 : -1);
+    }
+
+    this.platforms.push(plat);
   }
 
   updateHUD() {
@@ -952,6 +989,23 @@ class Game {
       }
 
       ctx.restore();
+
+      // Motion lines for self-moving platforms (non-conveyor)
+      if (plat.moveSpeed !== 0 && plat.type !== PLATFORM_TYPES.MOVING) {
+        ctx.save();
+        const mdir = plat.moveSpeed > 0 ? 1 : -1;
+        ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+        ctx.lineWidth = 1;
+        const trail = mdir > 0 ? px - 3 : px + plat.w + 3;
+        for (let ml = 0; ml < 3; ml++) {
+          const ly = py + 3 + ml * 4;
+          ctx.beginPath();
+          ctx.moveTo(trail, ly);
+          ctx.lineTo(trail - mdir * 6, ly);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
     }
   }
 
@@ -1107,7 +1161,7 @@ class Game {
     ctx.fillStyle = '#333340';
     ctx.fillRect(px + 4, py + 3, plat.w - 8, plat.h - 6);
     // Animated tread lines
-    const dir = plat.moveSpeed > 0 ? 1 : -1;
+    const dir = plat.beltDirection || (plat.moveSpeed > 0 ? 1 : -1);
     const treadOffset = (this.gameTime * 60 * dir) % 12;
     ctx.strokeStyle = 'rgba(200,200,220,0.35)';
     ctx.lineWidth = 1.5;
