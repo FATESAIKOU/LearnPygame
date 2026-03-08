@@ -13,7 +13,7 @@ import random
 from typing import List
 
 from constants import *
-from entities import Player, Platform, make_platform
+from entities import Player, Platform, ParticleSystem, make_platform
 from renderer import (
     init_colors, render_game, render_menu,
     render_pause, render_gameover,
@@ -27,19 +27,24 @@ class GameState:
     def __init__(self):
         self.player = Player(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
         self.platforms: List[Platform] = []
-        self.scroll_offset = 0.0     # 世界向上捲動的累計量（浮點）
+        self.particles = ParticleSystem()
+        self.scroll_offset = 0.0
         self.platform_speed = PLATFORM_SPEED_INITIAL
         self.score = 0
         self.level = 1
         self.frame = 0
 
-        # 下一個平台的 y 座標（世界座標，往下為大）
+        # 螢幕特效
+        self.shake_frames = 0
+        self.shake_x = 0
+        self.shake_y = 0
+        self.flash_type = ""
+        self.flash_frames = 0
+
         self._next_platform_y = SCREEN_HEIGHT - 1
         self._init_platforms()
 
     def _init_platforms(self):
-        """初始生成幾個平台讓玩家有地方站"""
-        # 底部保底平台（讓玩家一開始有地方站）
         start_plat = Platform(
             x=SCREEN_WIDTH // 2 - 5,
             y=SCREEN_HEIGHT // 2 + 2,
@@ -47,16 +52,31 @@ class GameState:
             platform_type=PLATFORM_NORMAL,
         )
         self.platforms.append(start_plat)
-        # 玩家站在起始平台上
         self.player.y = start_plat.y - 1
         self.player.on_platform = True
 
-        # 往下預填平台
         y = SCREEN_HEIGHT - 1
         while y < SCREEN_HEIGHT + 20:
             self.platforms.append(make_platform(y))
             y += PLATFORM_SPAWN_INTERVAL
         self._next_platform_y = y
+
+    def trigger_shake(self, intensity: int = 1):
+        self.shake_frames = SCREEN_SHAKE_FRAMES
+        self.shake_x = random.choice([-intensity, intensity])
+        self.shake_y = random.choice([-intensity, 0, intensity])
+
+    def trigger_flash(self, flash_type: str):
+        self.flash_type = flash_type
+        self.flash_frames = SCREEN_FLASH_FRAMES
+
+    def update_effects(self):
+        if self.shake_frames > 0:
+            self.shake_frames -= 1
+            self.shake_x = random.choice([-1, 0, 1]) if self.shake_frames > 0 else 0
+            self.shake_y = random.choice([-1, 0, 1]) if self.shake_frames > 0 else 0
+        if self.flash_frames > 0:
+            self.flash_frames -= 1
 
 
 class Game:
@@ -85,7 +105,6 @@ class Game:
             elif self.state == STATE_GAMEOVER:
                 self._handle_gameover(keys)
 
-            # 固定幀率休眠
             elapsed = time.monotonic() - t0
             sleep_time = frame_duration - elapsed
             if sleep_time > 0:
@@ -104,36 +123,49 @@ class Game:
     def _handle_playing(self, keys):
         gs = self.gs
 
-        # 暫停 / 離開
         if 'p' in keys:
             self.state = STATE_PAUSED
             return
         if 'q' in keys:
             raise SystemExit
 
-        # 輸入移動
+        # 輸入移動（帶尾跡）
         if 'left' in keys:
             gs.player.move(-PLAYER_MOVE_SPEED)
+            gs.particles.spawn_trail(gs.player.x + 1, gs.player.y)
         if 'right' in keys:
             gs.player.move(PLAYER_MOVE_SPEED)
+            gs.particles.spawn_trail(gs.player.x - 1, gs.player.y)
 
-        # 更新物理
+        # 下落時的微弱尾跡
+        if gs.player.vy > 1.0 and gs.frame % 2 == 0:
+            gs.particles.spawn_trail(gs.player.x, gs.player.y - 0.5, color_id=2)
+
         self._update_physics()
 
         # 難度提升
         if gs.frame > 0 and gs.frame % DIFFICULTY_INTERVAL == 0:
-            gs.platform_speed = min(gs.platform_speed + PLATFORM_SPEED_INCREMENT, 2.0)
+            gs.platform_speed = min(gs.platform_speed + PLATFORM_SPEED_INCREMENT,
+                                    PLATFORM_SPEED_MAX)
             gs.level += 1
 
-        # 分數（每幀 +1）
-        gs.score += gs.level
+        # 分數（連擊加成）
+        combo_bonus = max(1, gs.player.combo // 3)
+        gs.score += gs.level * combo_bonus
         gs.frame += 1
+
+        # 更新特效
+        gs.update_effects()
+        gs.particles.update(gs.platform_speed)
 
         # 渲染
         render_game(self.win, gs.player, gs.platforms, gs.score, gs.level,
-                    gs.frame, gs.platform_speed)
+                    gs.frame, gs.platform_speed,
+                    particles=gs.particles.particles,
+                    shake_x=gs.shake_x, shake_y=gs.shake_y,
+                    flash_type=gs.flash_type, flash_frames=gs.flash_frames)
 
-        # 死亡判定：掉出底部 或 被捲出頂部 或 HP 歸零
+        # 死亡判定
         if not gs.player.alive or gs.player.y > SCREEN_HEIGHT or gs.player.y < -1:
             self._end_game()
 
@@ -158,37 +190,42 @@ class Game:
         gs = self.gs
         player = gs.player
 
-        # 重力
         player.on_platform = False
         player.apply_gravity()
 
-        # 預測下一幀位置
         new_y = player.y + player.vy
 
-        # 碰撞偵測：掃描玩家移動路徑
         landed_platform = None
         for plat in gs.platforms:
             if not plat.active:
                 continue
-            # 玩家在平台水平範圍內
             if plat.left() <= player.x <= plat.right():
-                # 玩家從平台上方穿過 → 著陸
                 if player.y <= plat.top() < new_y + 0.5:
                     landed_platform = plat
-                    new_y = plat.top() - 1   # 停在平台頂部的上一格
+                    new_y = plat.top() - 1
                     player.vy = 0.0
                     player.on_platform = True
                     break
 
-        # 更新玩家 y
         player.y = new_y
         player.update()
 
-        # 處理著陸平台效果
+        # 著陸效果
         if landed_platform is not None:
+            player.land_combo()
+            gs.particles.spawn_landing_dust(player.x, player.y + 1)
             self._apply_platform_effect(landed_platform)
 
-        # 捲動世界（平台向上移動）
+            # 連擊分數彈出
+            if player.combo >= 3 and player.combo % 3 == 0:
+                bonus = player.combo * 10
+                gs.score += bonus
+                gs.particles.spawn_score_popup(
+                    player.x - 2, player.y - 2,
+                    f"+{bonus}", color_id=9
+                )
+
+        # 捲動
         gs.scroll_offset += gs.platform_speed
         step = gs.platform_speed
         for plat in gs.platforms:
@@ -196,26 +233,39 @@ class Game:
             plat.update()
         player.y -= step
 
-        # 生成新平台（從畫面底部下方補）
+        # 生成新平台
         gs._next_platform_y -= step
         while gs._next_platform_y < SCREEN_HEIGHT + PLATFORM_SPAWN_INTERVAL:
             gs.platforms.append(make_platform(gs._next_platform_y + SCREEN_HEIGHT))
             gs._next_platform_y += PLATFORM_SPAWN_INTERVAL
 
-        # 移除超出畫面頂部的平台
+        # 清理超出畫面的平台
         gs.platforms = [p for p in gs.platforms if p.y > -2]
 
     def _apply_platform_effect(self, plat: Platform):
-        player = self.gs.player
+        gs = self.gs
+        player = gs.player
+
         if plat.platform_type == PLATFORM_DAMAGE:
             player.take_damage(1)
+            gs.particles.spawn_damage_sparks(player.x, player.y)
+            gs.trigger_shake(2)
+            gs.trigger_flash("damage")
+
         elif plat.platform_type == PLATFORM_HEAL:
             player.heal(1)
+            gs.particles.spawn_heal_sparkles(player.x, player.y)
+            gs.trigger_flash("heal")
+
         elif plat.platform_type == PLATFORM_SPRING:
-            player.vy = -MAX_FALL_SPEED * 1.5   # 彈射
+            player.vy = -MAX_FALL_SPEED * 1.5
             player.on_platform = False
+            gs.particles.spawn_spring_burst(player.x, player.y + 1)
+            gs.trigger_shake(1)
+
         elif plat.platform_type == PLATFORM_CRUMBLE:
-            plat.active = False  # 崩壞平台消失
+            plat.start_crumble()
+            gs.particles.spawn_crumble_debris(plat.x, plat.y, plat.width)
 
     # ──────────────────────────────
     # 遊戲開始 / 結束
