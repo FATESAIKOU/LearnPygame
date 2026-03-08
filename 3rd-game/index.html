@@ -663,7 +663,7 @@ class Game {
     // Conveyor belt effect: belt drags player and modifies move speed
     if (this.player.onPlatform && this.player.onPlatform.type === PLATFORM_TYPES.MOVING) {
       const belt = this.player.onPlatform.beltDirection;
-      const CONVEYOR_DRAG = 1.0;
+      const CONVEYOR_DRAG = 0.35;
       this.player.x += belt * CONVEYOR_DRAG;
       if (moveDir !== 0) {
         if (moveDir === belt) {
